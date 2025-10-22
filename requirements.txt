@@ -1,0 +1,17 @@
+ipython
+matplotlib
+pandas
+geopandas
+tqdm
+xarray
+h5netcdf
+netcdf4
+dask
+scipy
+rasterio
+gdal
+pyarrow
+ssort
+python-dotenv
+textalloc
+segysak
