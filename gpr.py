@@ -31,42 +31,24 @@ def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
     coords.columns = [str(col).lower() for col in coords.columns]
 
 
-    coords = gpd.GeoDataFrame(coords, geometry=gpd.points_from_xy(coords["longitude rtk"], coords["latitude rtk"], crs=4326)).to_crs(crs_epsg)
+    # For this file, RTK stopped working mid-flight so it cannot be used.
+    if "2025-09-03-08-14-45" in filepath.stem:
+        c_cols = ["longitude", "latitude"]
+    else:
+        c_cols = ["longitude rtk", "latitude rtk"]
+
+    coords = gpd.GeoDataFrame(coords, geometry=gpd.points_from_xy(coords[c_cols[0]], coords[c_cols[1]], crs=4326)).to_crs(crs_epsg)
 
     coords["easting"] = coords["geometry"].x
     coords["northing"] = coords["geometry"].y
 
-    # print(coords.iloc[1000])
-
-    # plt.plot(coords.index, coords["alt:altitude"])
-    # plt.show()
-    # return
-
-
+    # The files are huge so this part subsets the data to roughly where the glacier part starts and ends.
     relevant_traces = {
         "2025-09-03-08-14-45": (7000, 76500),
         "2025-09-03-08-47-05": (5000, 110000),
         "2025-09-03-09-18-08": (6700, 127800),
     }
-    # print(coords.iloc[0])
-    # return
 
-    # print(coord_fp)
-    # return
-
-
-
-    # print(coord_fp)
-    # print(coords.shape)
-    # print(coords.iloc[10])
-    # return
-
-    # filepath = Path("input/gpr/Juvfonna_GPR_20250903/2025-09-03-08-37-27-gpr.sgy")
-
-    # with segysak.segy.segy_loader(filepath, endian="little") as data:
-    #     print(data)
-    # with xr.open_dataset(filepath, engine="sgy_engine", endian="little") as data:
-        # print(data)
     with segyio.open(filepath, endian="little", strict=False) as f:
         sample_time_ps = f.header[0][segyio.TraceField.TRACE_SAMPLE_INTERVAL]
         sample_time_t0 = f.header[0][segyio.TraceField.DelayRecordingTime]
@@ -77,13 +59,11 @@ def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
 
     with xr.open_dataset(filepath, engine="sgy_engine",segyio_kwargs={"endian": "little"}, dim_byte_fields={"trace_n": 21}) as data:
 
-        # data["trace_n"] = data["trace_n"].astype("int64")
         for key in relevant_traces:
             if key in filepath.stem:
                 data = data.sel(trace_n=slice(*relevant_traces[key]))
                 print("Sliced with preset values")
                 break
-
 
         for col in ["easting", "northing", "altitude", "alt:altitude"]:
             data[col] = "trace_n", scipy.interpolate.interp1d(coords.index, coords[col], fill_value="extrapolate")(data["trace_n"])
@@ -100,15 +80,10 @@ def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
         diffs = data[["easting", "northing"]].diff("trace_n").broadcast_like(data["easting"]).fillna(0)
         data["distance"] = ((diffs["easting"] ** 2 + diffs["northing"] ** 2) ** 0.5).cumsum("trace_n")
 
-        # data["distance"] = data["easting"].diff(
-
-        # window_length = 5000
         data.attrs = {}
-        # win_start = 10000
 
         data["data"] -= data["data"].median("trace_n")
         data["data"] /= 1e8
-        # data["data"] = data["data"]
 
         tmp_path = out_path.with_suffix(".nc.tmp")
         tmp_path.parent.mkdir(exist_ok=True, parents=True)
@@ -133,23 +108,33 @@ def proj_digitized(data_filepath: Path, digitized_surface_filepath: Path,digitiz
     with xr.open_dataset(data_filepath, chunks={"data": "auto"}) as data:
         data["distance"].load()
 
-        interp_points = np.unique(scipy.interpolate.interp1d(data["distance"], data["trace_n"])(np.arange(0, data["distance"].max().item(), 1)).astype(int))
+        interp_points = np.unique(scipy.interpolate.interp1d(data["distance"], np.arange(data["trace_n"].shape[0]))(np.arange(0, data["distance"].max().item(), 1)).astype(int))
+        # interp_points = np.linspace(0, data["trace_n"].shape[0], 10000).astype(int)
 
         surface_coords = np.array(digitized_surface["geometry"].iloc[0].xy)
-        surface_model = scipy.interpolate.interp1d(data.data.shape[1] - surface_coords[0, :], data.data.shape[0] + surface_coords[1, :])
+        surface_model = scipy.interpolate.interp1d(surface_coords[0, :], data.data.shape[0] + surface_coords[1, :])
 
-        for _, line in digitized_bed["geometry"].items():
+        for i, line in digitized_bed["geometry"].items():
             coords = np.array(line.xy)
 
-            model = scipy.interpolate.interp1d(data.data.shape[1] - coords[0, :], data.data.shape[0] + coords[1, :], bounds_error=False)
+            model = scipy.interpolate.interp1d(coords[0, :], data.data.shape[0] + coords[1, :], bounds_error=False)
 
-            pred = model(interp_points)
+            interp_filt = interp_points[(interp_points > coords[0, :].min()) & (interp_points < coords[0, :].max())]
+
+
+            pred = model(interp_points.astype(float))
 
             mask = np.isfinite(pred)
 
             vals = pd.DataFrame({"x": interp_points[mask], "y": pred[mask].astype(int)}) 
 
+            if "2025-09-03-08-14-45-gpr" in data_filepath.stem:
+                print(data.data.shape)
+                print(interp_points.min(), interp_points.max())
+                print(interp_filt.shape)
+                print(coords[:, 0].min(), coords[:, 0].max())
             if vals.shape[0] == 0:
+                print(f"Line {i} invalid")
                 continue
 
             for col in data.data_vars:
@@ -198,7 +183,20 @@ def main(crs_epsg: int = 25832):
     proj_list = []
     for filepath in filepaths:
 
+        # if "2025-09-03-08-14-45-gpr" not in filepath.stem:
+        #     continue
         data_filepath = prepare_dataset(filepath, crs_epsg=crs_epsg)
+        continue
+
+        with xr.open_dataset(data_filepath) as data:
+
+            track = gpd.GeoDataFrame(geometry=gpd.points_from_xy(data["easting"], data["northing"], crs=crs_epsg))
+            track["trace_n"] = data["trace_n"].values
+
+            track.to_file(f"temp/{data_filepath.stem}_track.geojson")
+            # plt.title(data_filepath.stem)
+            # plt.scatter(data["easting"], data["northing"])
+            # plt.show()
         for digitized_bed_filepath in Path("digitized").glob("*bed.geojson"):
 
             digitized_surface_filepath = digitized_bed_filepath.with_stem(digitized_bed_filepath.stem.replace("_bed", "_surface"))
@@ -209,125 +207,6 @@ def main(crs_epsg: int = 25832):
 
             
     pd.concat([gpd.read_file(fp) for fp in proj_list]).to_file(proj_list[0].parent / "combined_proj.geojson")
-
-    return
-    # filepaths = list()
-    #
-    # print(filepaths)
-
-    filepath = filepaths[1]
-
-    # print(filepath)
-    # return
-
-    print(filepath)
-    coord_fp = filepath.with_name(filepath.stem.replace("-gpr", "-position.csv"))
-
-    if "09-18-08" in filepath.stem:
-        coord_fp = coord_fp.with_stem(coord_fp.stem.replace("09-18-08", "09-18-10"))
-
-    coords = pd.read_csv(coord_fp)
-    coords = coords.dropna(subset=["zGPR:Trace", "Longitude"]).set_index("zGPR:Trace")
-    coords.columns = [str(col).lower() for col in coords.columns]
-
-
-    coords = gpd.GeoDataFrame(coords, geometry=gpd.points_from_xy(coords["longitude rtk"], coords["latitude rtk"], crs=4326)).to_crs(crs_epsg)
-
-    coords["easting"] = coords["geometry"].x
-    coords["northing"] = coords["geometry"].y
-
-    # print(coords.iloc[1000])
-
-    # plt.plot(coords.index, coords["alt:altitude"])
-    # plt.show()
-    # return
-
-
-    relevant_traces = {
-        "2025-09-03-08-14-45": (7000, 76500),
-        "2025-09-03-08-47-05": (5000, 110000),
-        "2025-09-03-09-18-08": (6700, 127800),
-    }
-    # print(coords.iloc[0])
-    # return
-
-    # print(coord_fp)
-    # return
-
-
-
-    # print(coord_fp)
-    # print(coords.shape)
-    # print(coords.iloc[10])
-    # return
-
-    # filepath = Path("input/gpr/Juvfonna_GPR_20250903/2025-09-03-08-37-27-gpr.sgy")
-
-    # with segysak.segy.segy_loader(filepath, endian="little") as data:
-    #     print(data)
-    # with xr.open_dataset(filepath, engine="sgy_engine", endian="little") as data:
-        # print(data)
-    with segyio.open(filepath, endian="little", strict=False) as f:
-        sample_time_ps = f.header[0][segyio.TraceField.TRACE_SAMPLE_INTERVAL]
-        sample_time_t0 = f.header[0][segyio.TraceField.DelayRecordingTime]
-
-        n_samples = f.header[0][segyio.TraceField.TRACE_SAMPLE_COUNT]
-
-    twtt_ns = np.arange(n_samples) * sample_time_ps / 1000 -sample_time_t0 / 1000 
-
-    with xr.open_dataset(filepath, engine="sgy_engine",segyio_kwargs={"endian": "little"}, dim_byte_fields={"cdp": 21}) as data:
-
-        for key in relevant_traces:
-            if key in filepath.stem:
-                data = data.sel(cdp=slice(*relevant_traces[key]))
-                print("Slicing")
-                break
-
-
-        for col in ["easting", "northing", "altitude", "alt:altitude"]:
-            data[col] = "cdp", scipy.interpolate.interp1d(coords.index, coords[col], fill_value="extrapolate")(data["cdp"])
-
-        if data.data.shape[1] >= n_samples:
-            data = data.isel(samples=slice(n_samples))
-
-        data.coords["twtt"] = "samples", twtt_ns
-        data = data.swap_dims(samples="twtt")
-
-        # Make it (sample, trace_n) instead of (trace_n, sample)
-        data["data"] = data["data"].T
-
-        window_length = 5000
-        win_start = 10000
-
-        data["data"] -= data["data"].median("cdp")
-        data["data"] /= 1e8
-
-        data = data.isel(cdp=slice(win_start, min(data.cdp.shape[0], win_start + window_length)))
-
-        # with xr.open_dataset(
-
-        # print(data)
-        # return
-
-        # data["data"].values -= np.median(data["data"].values, axis=1, keepdims=True)
-
-
-        plt.imshow(data.data, vmin=-1, vmax=1, cmap="Greys_r", extent=(data.cdp.min().item(), data.cdp.max().item(), data.twtt.max().item(), data.twtt.min().item()), aspect="auto")
-        plt.show()
-        print(data)
-    return
-
-    with segyio.open(filepath, ignore_geometry=True, strict=False, endian="big") as f:
-        print(f.tracecount)
-        print(f.samples.size)
-
-    return
-
-    with xr.open_dataset(filepath, dim_byte_fields={"iline": 189, "xline": 193}, extra_byte_fields={"cdp_x": 73, "cdp_y": 77}) as dataset:
-        print(dataset)
-
-    
-    ...
 
 if __name__ == "__main__":
     main()
