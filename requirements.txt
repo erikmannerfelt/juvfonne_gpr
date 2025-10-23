@@ -12,6 +12,5 @@ rasterio
 gdal
 pyarrow
 ssort
-python-dotenv
-textalloc
 segysak
+cdsapi
