@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 import itertools
 import tqdm
@@ -101,12 +102,13 @@ def juvfonne_thickness_series(
     return H
 
 
-def main():
+def main(min_tau=10, max_tau=20, n_steps_per_member: int = 5, thickness_uncertainty: float = 1.):
     import matplotlib.pyplot as plt
 
     import xarray as xr
     import climate
-    temp_data = climate.main(models=["noresm2_mm", "cesm2"])
+    # temp_data = climate.main(models=["noresm2_mm", "cesm2"])
+    temp_data = climate.main()
 
     # temp_data.to_csv("temp_data.csv")
     # temp_data = pd.read_csv("temp_data.csv", index_col=0)
@@ -122,20 +124,19 @@ def main():
     # temp_data = temp_smoothed
     temp_data = temp_data.groupby(level=["model", "ssp"]).transform(lambda s: s.rolling(window=5, min_periods=1).mean())
 
-    taus = np.linspace(10, 20, 5)
-    h2011s = thickness_vals[2011] + np.linspace(-1, 1, 5)
-    h2025s = thickness_vals[2025] + np.linspace(-1, 1, 5)
+    taus = np.linspace(min_tau, max_tau, n_steps_per_member)
+    h2011s = thickness_vals[2011] + np.linspace(-thickness_uncertainty, thickness_uncertainty, n_steps_per_member)
+    h2025s = thickness_vals[2025] + np.linspace(-thickness_uncertainty, thickness_uncertainty, n_steps_per_member)
 
     combos = list(itertools.product(taus, h2011s, h2025s))
 
+    temp_ensemble = temp_data.groupby(level=["ssp", "year"]).quantile([0.05, 0.25, 0.75, 0.95])
 
     # colors = dict(zip(sorted(temp_data.columns), ["blue", "green", "red"]))
     #
     coords = {k: temp_data.index.get_level_values(k).unique() for k in temp_data.index.names} | {"i": np.arange(len(combos))}
     # out = xr.Dataset(coords=)
 
-    fig = plt.figure()
-    axes = fig.subplots(1, 3)
     arrs = []
     for i, (tau, h2011, h2025) in tqdm.tqdm(enumerate(combos), total=len(combos)):
         for j, ssp_str in enumerate(temp_data.index.get_level_values("ssp").unique()):
@@ -151,18 +152,49 @@ def main():
 
     out = xr.combine_by_coords(arrs)
 
-    out["median"] = out["h"].median(["model", "i"])
+
+    out["q"] = out["h"].quantile([0.05, 0.25, 0.5, 0.75, 0.95], dim=["model", "i"])
+    # print(out)
+    # return
+    # out["median"] = out["h"].median(["model", "i"])
+
 
     
+    fig = plt.figure(figsize=(8, 6))
+    axes = fig.subplots(2, 3, sharex=True, sharey="row")
     ssps = temp_data.index.get_level_values("ssp").unique()
+    era5 = temp_ensemble.loc[(ssps[0], slice(None), 0.25)].loc[:2025]
+
     for i, ssp_str in enumerate(sorted(ssps)):
         # ssp = temp_data.index.get_level_values("ssp").unique()[i]
-        axes[i].set_title(ssp_str)
+        ssp_fmt = "{} {}.{}".format(*str(ssp_str).upper().split("_"))
 
-        out["median"].sel(ssp=ssp_str).plot(ax=axes[i])
+        ssp_temp = temp_ensemble.loc[(ssp_str, slice(None), slice(None))]
+
+        axes[0, i].fill_between(ssp_temp.index.get_level_values("year").unique(), temp_ensemble.loc[(ssp_str, slice(None), 0.05)], temp_ensemble.loc[(ssp_str, slice(None), 0.95)], label="5-95th percentile", alpha=0.4, color="pink") 
+        axes[0, i].fill_between(ssp_temp.index.get_level_values("year").unique(), temp_ensemble.loc[(ssp_str, slice(None), 0.25)], temp_ensemble.loc[(ssp_str, slice(None), 0.75)], label="25-75th percentile", alpha=0.5, color="red") 
+
+        axes[0, i].plot(era5, label="ERA5")
+
+        axes[0, i].set_title(ssp_fmt)
+
+        axes[1, i].fill_between(out["year"].values, out["q"].sel(quantile=0.05, ssp=ssp_str), out["q"].sel(quantile=0.95, ssp=ssp_str), color="purple", alpha=0.2, label="5-95th percentile")
+        axes[1, i].fill_between(out["year"].values, out["q"].sel(quantile=0.25, ssp=ssp_str), out["q"].sel(quantile=0.75, ssp=ssp_str), color="blue", alpha=0.5, label="25-75th percentile")
+
+        # out["median"].sel(ssp=ssp_str).plot(ax=axes[i])
     
-        axes[i].scatter(thickness_vals.index, thickness_vals)
+        axes[1, i].scatter(thickness_vals.index, thickness_vals, label="Measurements", color="black", marker="x")
 
+    axes[1, 0].set_ylabel("Mean thickness (m)")
+    axes[0, 0].set_ylabel("1900-m air temperature (°C)")
+    axes[1, 1].legend(loc="upper right")
+    axes[0, 1].legend(loc="upper right")
+    axes[1, 1].set_xlabel("Year")
+    axes[0, 1].set_ylim(0, 8)
+    plt.xlim(2010, 2070)
+    plt.tight_layout()
+    Path("figures/").mkdir(exist_ok=True)
+    plt.savefig("figures/thickness_forecast.jpg", dpi=400)
     # plt.legend()
     plt.show()
 

@@ -9,6 +9,7 @@ import geopandas as gpd
 import json
 import scipy.interpolate
 import shutil
+import shapely.geometry
 
 from pathlib import Path
 
@@ -177,7 +178,17 @@ def generate_track(data_filepath: Path, crs_epsg: int):
         track_pts = gpd.GeoDataFrame(geometry=gpd.points_from_xy(data["easting"], data["northing"], crs=crs_epsg))
         track_pts["trace_n"] = data["trace_n"].values
 
-        track_pts.to_file(f"temp/{data_filepath.stem}_track_pts.geojson")
+        track_fp = Path(f"proc/tracks/{data_filepath.stem}_track.geojson")
+        track_pts_fp = track_fp.with_stem(track_fp.stem + "_pts")
+        track_fp.parent.mkdir(exist_ok=True, parents=True)
+
+
+        line = gpd.GeoDataFrame(geometry=[shapely.geometry.LineString(track_pts["geometry"])], crs=track_pts.crs)
+
+        line["length"] = line["geometry"].length
+        line["filename"] = data_filepath.stem
+        track_pts.to_file(track_pts_fp)
+        line.to_file(track_fp)
 
 
 def main(crs_epsg: int = 25832):

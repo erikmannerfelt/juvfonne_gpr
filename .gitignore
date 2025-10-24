@@ -1,3 +1,7 @@
 proc/
-input/
+input/gpr
 digitized/proj
+data/
+figures/
+download.zip
+__pycache__

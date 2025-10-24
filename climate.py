@@ -10,7 +10,7 @@ import pandas as pd
 
 def get_area(product: Literal["cmip6", "era5-land", "era5"], lat: float = 61.6769475, lon: float = 8.3489006) -> list[float]:
     if product == "cmip6":
-        res = 1.
+        res = 10.
     elif product == "era5-land":
         res = 0.25
     elif product == "era5":
@@ -20,7 +20,7 @@ def get_area(product: Literal["cmip6", "era5-land", "era5"], lat: float = 61.676
 
     lat_min = math.floor(lat / res) * res
     lon_min = math.floor(lon / res) * res
-    return [lat_min, lon_min, lat_min + res, lon_min + res]
+    return [lat_min - res, lon_min, lat_min + res * 2, lon_min + res]
 
 
     
@@ -137,7 +137,7 @@ def process_climate_data(data: xr.Dataset, variable: str, plev_col: str, pressur
     return data
 
 
-def main(altitude: float = 1900., models=["noresm2_mm", "cesm2", "ec-earth3", "mpi-esm1-2-lr", "ukesm1-0-ll"]):
+def main(altitude: float = 1900., models=["noresm2_mm", "cesm2", "ec_earth3_veg_lr", "ukesm1_0_ll","awi_cm_1_1_mr" ]):
 
     pressure_level = (1013 - (1900 * 0.12))
 
@@ -150,6 +150,7 @@ def main(altitude: float = 1900., models=["noresm2_mm", "cesm2", "ec-earth3", "m
 
     ssp_temps = {}
     for model in models:
+        print(model)
         # model_ssp = {}
         # ssp_temps[model] = model_ssp
         for ssp_str in ssps:
