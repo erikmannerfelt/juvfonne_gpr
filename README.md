@@ -1,5 +1,7 @@
 # Code for GPR and ice patch thickness forecasting for the Juvfonne ice cap, Norway
 
+See the "Releases" tab for the finalized thickness point data.
+
 ## Installation
 
 This has been run on a nix-enabled system, meaning that the environment can be recreated with `nix develop`.
