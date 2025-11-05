@@ -1,4 +1,4 @@
-# Code for GPR and ice patch thickness forecasting for the Juvfonne ice cap, Norway
+# Code for GPR, and ice patch thickness forecasting, for the Juvfonne ice cap, Norway
 
 See the "Releases" tab for the finalized thickness point data.
 
