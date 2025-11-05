@@ -1,3 +1,8 @@
+"""
+Functions to read UAV-GPR data and to process manual interpretations.
+
+Author: Erik Schytt Mannerfelt
+"""
 import segysak.segy
 import segysak
 import segyio
@@ -16,7 +21,19 @@ from pathlib import Path
 ICE_VELOCITY = 0.168
 
 def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
+    """Convert GPR data from its proprietary format into a simpler NetCDF.
 
+    This also includes a median trace correction, and functionality specific to Juvfonne 2025 GPR data. 
+
+    Arguments
+    ---------
+
+    - filepath
+        The filepath to the ".sgy" data file. Must be accompanied with a "*-position.csv" file  
+    - crs_epsg
+        The EPSG code (e.g. 25835) to convert coordinates into
+
+    """
     out_path = Path(f"proc/{filepath.stem}.nc")
 
     if out_path.is_file():
@@ -86,6 +103,7 @@ def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
 
         data.attrs = {}
 
+        # Perform a median trace correction and make the values a bit smaller
         data["data"] -= data["data"].median("trace_n")
         data["data"] /= 1e8
 
@@ -101,8 +119,26 @@ def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
     return out_path
 
 
-def process_picks(data_filepath: Path, digitized_surface_filepath: Path,digitized_bed_filepath: Path, crs_epsg: int, spacing_m: float = 1.):
+def process_picks(data_filepath: Path, digitized_surface_filepath: Path,digitized_bed_filepath: Path, crs_epsg: int, spacing_m: float = 1.) -> Path:
+    """Process interpretations (picks) into point thickness data.
 
+    Arguments
+    ---------
+    - data_filepath
+        Filepath to the processed GPR data
+    - digitized_surface_filepath
+        Filepath to the digitized ice surface measurements
+    - digitized_bed_filepath
+        Filepath to the digitized ice bed (bottom) measurements
+    - crs_epsg
+        EPSG code of the input GPR data and output points
+    - spacing_m
+        The requested output spacing between points in meters
+
+    Returns
+    -------
+    A filepath to the created point data.
+    """
     digitized_bed = gpd.read_file(digitized_bed_filepath)
 
     if digitized_bed.shape[0] == 0:
@@ -175,7 +211,7 @@ def process_picks(data_filepath: Path, digitized_surface_filepath: Path,digitize
 
 
 def generate_track(data_filepath: Path, crs_epsg: int):
-    
+    """Generate a track and track points for the given GPR dataset."""
     with xr.open_dataset(data_filepath) as data:
         track_pts = gpd.GeoDataFrame(geometry=gpd.points_from_xy(data["easting"], data["northing"], crs=crs_epsg))
         track_pts["trace_n"] = data["trace_n"].values
@@ -231,9 +267,7 @@ def main(crs_epsg: int = 25832):
 
 
 def plot_gpr_example():
-
-    # with xr.open_dataset("proc/2025-09-03-08-14-45-gpr.nc") as data:
-    #     data = data.isel(trace_n=slice(44000, 56000))
+    """Plot a GPR data and interpretation example from Juvfonne."""
     file_stem = "2025-09-03-08-47-05-gpr"
 
     fig = plt.figure(figsize=(8.3, 4.5))
@@ -264,10 +298,6 @@ def plot_gpr_example():
         axes[1].legend()
 
         print(f"xaxis is {gpr['distance'].max().item() - gpr['distance'].min().item():.1f} m")
-
-        # axes[1].plot(picks["x"], picks["surface_twtt"])
-        # axes[1].plot(picks["x"], picks["bed_twtt"])
-
 
         plt.xlim(extent[:2])
         plt.ylim(extent[2:])

@@ -1,5 +1,12 @@
+"""
+Functions to forecast ice cap thickness in the future based on climate and thickness measurements.
+
+Author: Erik Schytt Mannerfelt
+"""
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import xarray as xr
 from pathlib import Path
 
 import itertools
@@ -10,7 +17,7 @@ def juvfonne_thickness_series(
     H_2011: float,
     H_2025: float,
     tau: float
-) -> pd.Series:
+) -> tuple[pd.Series, tuple[float, float]]:
     """
     Forward-only thickness model for Juvfonne based on a first-order lag:
         H_{y+1} = (1 - 1/tau) * H_y + (1/tau) * (a + b*T_y)
@@ -28,7 +35,6 @@ def juvfonne_thickness_series(
         JJA temperatures indexed by *integer years* (e.g., 2001..2100).
         Must contain a contiguous run of years from 2011..Ymax *and*
         at least 2011..2024 for calibration (since we step 2011->2025).
-        (If you want to use 10-yr means, compute them before calling.)
     H_2011 : float
         Observed thickness (m) at end of 2011.
     H_2025 : float
@@ -38,8 +44,7 @@ def juvfonne_thickness_series(
 
     Returns
     -------
-    pd.Series
-        Modeled thickness (m) for years 2011..max(T.index), inclusive.
+    A series of the thickness timeseries, and a tuple of slope/intercept parameters for the eq. thickness function.
 
     Raises
     ------
@@ -103,17 +108,8 @@ def juvfonne_thickness_series(
 
 
 def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
-    import matplotlib.pyplot as plt
-
-    import xarray as xr
     import climate
-    # temp_data = climate.main(models=["noresm2_mm", "cesm2"])
     temp_data = climate.main()
-
-    # temp_data.to_csv("temp_data.csv")
-    # temp_data = pd.read_csv("temp_data.csv", index_col=0)
-
-    # temp_data = temp_data[sorted(temp_data.columns)]
 
     thickness_vals = pd.Series({2011: 5.6, 2025: 3.5})
 
@@ -124,14 +120,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
 
     print(f"Tau ranges between {min_tau:.1f} and {max_tau:.1f}")
 
-    # print(diff_per_year)
-    # return
-
-    # temp_smoothed = temp_data.rolling(window=5, min_periods=1, center=True).mean()
-    # # temp_data.loc[2011] = temp_data.loc[2001:2011].mean(axis="rows")
-    # # temp_data.loc[2024] = temp_data.loc[2014:2024].mean(axis="rows")
-    # temp_data.loc[:2025] = temp_smoothed.loc[:2025]
-    # temp_data = temp_smoothed
     temp_data = temp_data.groupby(level=["model", "ssp"]).transform(lambda s: s.rolling(window=3, min_periods=1).mean())
 
     taus = np.linspace(min_tau, max_tau, n_steps_per_member)
@@ -142,10 +130,7 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
 
     temp_ensemble = temp_data.groupby(level=["ssp", "year"]).quantile([0.05, 0.25, 0.75, 0.95])
 
-    # colors = dict(zip(sorted(temp_data.columns), ["blue", "green", "red"]))
-    #
     coords = {k: temp_data.index.get_level_values(k).unique() for k in temp_data.index.names} | {"i": np.arange(len(combos))}
-    # out = xr.Dataset(coords=)
 
     arrs = []
     for i, (tau, h2011, h2025) in tqdm.tqdm(enumerate(combos), total=len(combos)):
@@ -153,8 +138,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
 
             for model in temp_data.index.get_level_values("model").unique():
                 h_series, (a, b) = juvfonne_thickness_series(temp_data.loc[(model, ssp_str, slice(None))], H_2011=h2011, H_2025=h2025, tau=tau)
-                # h_series = juvfonne_thickness_series_constrained(temp_data[ssp_str], H_2011=thickness_vals[2011], H_2025=thickness_vals[2025], tau=5)
-                #
                 arr = xr.DataArray(h_series.clip(lower=0).values, name="h", coords=(("year", h_series.index),)).to_dataset()
 
                 arr["a"] = a
@@ -166,10 +149,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
 
 
     out["q"] = out["h"].quantile([0.05, 0.25, 0.5, 0.75, 0.95], dim=["model", "i"])
-    # print(out)
-    # return
-    # out["median"] = out["h"].median(["model", "i"])
-    #
 
     quantiles = [0.25, 0.5, 0.75]
     q_a = out["a"].quantile(quantiles)
@@ -179,9 +158,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
     print(f"Avg temp 2011-2025: {avg_study_temp:.1f} deg C")
     for quantile in quantiles:
         
-        # mean_a = out["a"].mean().item()
-        # mean_b = out["b"].mean().item()
-        #
         a = q_a.sel(quantile=quantile).item()
         b = q_b.sel(quantile=quantile).item()
 
@@ -199,7 +175,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
     era5 = temp_ensemble.loc[(ssps[0], slice(None), 0.25)].loc[:2025]
 
     for i, ssp_str in enumerate(sorted(ssps)):
-        # ssp = temp_data.index.get_level_values("ssp").unique()[i]
         ssp_fmt = "{} {}.{}".format(*str(ssp_str).upper().split("_"))
 
         ssp_temp = temp_ensemble.loc[(ssp_str, slice(None), slice(None))]
@@ -213,9 +188,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
 
         axes[1, i].fill_between(out["year"].values, out["q"].sel(quantile=0.05, ssp=ssp_str), out["q"].sel(quantile=0.95, ssp=ssp_str), color="purple", alpha=0.2, label="5-95th percentile")
         axes[1, i].fill_between(out["year"].values, out["q"].sel(quantile=0.25, ssp=ssp_str), out["q"].sel(quantile=0.75, ssp=ssp_str), color="blue", alpha=0.5, label="25-75th percentile")
-
-        # out["median"].sel(ssp=ssp_str).plot(ax=axes[i])
-    
         axes[1, i].scatter(thickness_vals.index, thickness_vals, label="Measurements", color="black", marker="x")
 
     axes[1, 0].set_ylabel("Mean thickness (m)")
@@ -228,7 +200,6 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
     plt.tight_layout()
     Path("figures/").mkdir(exist_ok=True)
     plt.savefig("figures/thickness_forecast.jpg", dpi=400)
-    # plt.legend()
     plt.show()
 
     
@@ -237,15 +208,3 @@ def main(n_steps_per_member: int = 6, thickness_uncertainty: float = 1.1):
 if __name__ == "__main__":
     main()
     
-    # # Example (replace with your preprocessed JJA series):
-    # years = np.arange(2001, 2101)
-    # T = pd.Series(index=years, data=np.linspace(5.0, 9.0, len(years)))  # placeholder temps
-
-    # H_series = juvfonne_thickness_series(
-    #     T=T,
-    #     H_2011=16.0,
-    #     H_2025=8.0,
-    #     tau=20.0
-    # )
-    # print(H_series.loc[2011:2026])
-

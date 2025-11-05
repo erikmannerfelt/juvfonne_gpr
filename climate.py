@@ -1,3 +1,8 @@
+"""
+Scripts to download ERA5 and CMIP6 climate data over Juvfonne.
+
+Author: Erik Schytt Mannerfelt
+"""
 import zipfile
 from pathlib import Path
 from typing import Literal
@@ -150,9 +155,6 @@ def main(altitude: float = 1900., models=["noresm2_mm", "cesm2", "ec_earth3_veg_
 
     ssp_temps = {}
     for model in models:
-        print(model)
-        # model_ssp = {}
-        # ssp_temps[model] = model_ssp
         for ssp_str in ssps:
             filepath = get_cmip(ssp_str, model=model)
 
