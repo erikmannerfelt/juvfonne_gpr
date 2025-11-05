@@ -13,6 +13,8 @@ import shapely.geometry
 
 from pathlib import Path
 
+ICE_VELOCITY = 0.168
+
 def prepare_dataset(filepath: Path, crs_epsg: int) -> Path:
 
     out_path = Path(f"proc/{filepath.stem}.nc")
@@ -163,7 +165,7 @@ def process_picks(data_filepath: Path, digitized_surface_filepath: Path,digitize
     # The twtt-part that's relevant is the difference between the bed and the surface.
     # Essentially, the surface becomes the time-0 part, to relate it to surface-coupled GPR.
     proj["ice_twtt"] = proj["bed_twtt"] - proj["surface_twtt"]
-    proj["depth"] = proj["ice_twtt"] * 0.168 / 2
+    proj["depth"] = proj["ice_twtt"] * ICE_VELOCITY / 2
 
     out_file = digitized_bed_filepath.parent / f"proj/{digitized_bed_filepath.stem}_proj.geojson"
     out_file.parent.mkdir(exist_ok=True, parents=True)
@@ -227,5 +229,69 @@ def main(crs_epsg: int = 25832):
             
     pd.concat([gpd.read_file(fp) for fp in pick_list]).to_file(pick_list[0].parent / "combined_proj.geojson")
 
+
+def plot_gpr_example():
+
+    # with xr.open_dataset("proc/2025-09-03-08-14-45-gpr.nc") as data:
+    #     data = data.isel(trace_n=slice(44000, 56000))
+    file_stem = "2025-09-03-08-47-05-gpr"
+
+    fig = plt.figure(figsize=(8.3, 4.5))
+    axes = fig.subplots(2, 1, sharex=True, sharey=True)
+    with xr.open_dataset(f"proc/{file_stem}.nc") as gpr:
+        xlim = (44000, 49000)
+        gpr = gpr.isel(trace_n=slice(*xlim))
+
+        picks = gpd.read_file(f"digitized/proj/{file_stem}_digitized_bed_proj.geojson").sort_values("x")
+        picks["x"] -= xlim[0]
+
+        
+        picks["surface_depth"] = picks["surface_twtt"] * ICE_VELOCITY / 2
+        picks["bed_depth"] = picks["bed_twtt"] * ICE_VELOCITY / 2
+        gpr["depth"] = gpr["twtt"] * ICE_VELOCITY / 2
+
+        gpr["data"] *= 1 + gpr["depth"] * 0.2
+        gpr["data"] -= gpr["data"].median("trace_n")
+
+        extent= [0, gpr.trace_n.shape[0], gpr.depth.max(), gpr.depth.min()] 
+        axes[0].imshow(gpr.data, aspect="auto", cmap="Greys_r", vmin=-0.7, vmax=0.7, extent=extent)
+
+        axes[1].fill_between(picks["x"], picks["surface_depth"], picks["bed_depth"], color="lightblue", label="Ice")
+        axes[1].plot(picks["x"], picks["surface_depth"], color="#9ce")
+        axes[1].fill_between(picks["x"], 20, picks["bed_depth"], color="#999", label="Ground")
+        axes[1].plot(picks["x"], picks["bed_depth"], color="#666")
+
+        axes[1].legend()
+
+        print(f"xaxis is {gpr['distance'].max().item() - gpr['distance'].min().item():.1f} m")
+
+        # axes[1].plot(picks["x"], picks["surface_twtt"])
+        # axes[1].plot(picks["x"], picks["bed_twtt"])
+
+
+        plt.xlim(extent[:2])
+        plt.ylim(extent[2:])
+
+        for i in range(2):
+            axes[i].set_ylabel("Depth from sensor (m)")
+
+        axes[1].set_xlabel("Trace number")
+
+        plt.tight_layout()
+        for i in range(2):
+            axes[i].text(0.01, 0.97, "abc"[i], transform=axes[i].transAxes, va="top", fontsize=11, color="white" if i ==0 else "black")
+
+        Path("figures/").mkdir(exist_ok=True)
+        plt.savefig("figures/gpr_example.jpg", dpi=400)
+        plt.show()
+
+
+def gpr_statistics():
+
+    data = gpd.read_file("digitized/proj/combined_proj.geojson")
+
+    print(data["depth"].describe())
+
 if __name__ == "__main__":
     main()
+    plot_gpr_example()

@@ -5,3 +5,6 @@ data/
 figures/
 download.zip
 __pycache__
+input/ESRI*.tif
+input/ESRI*.tif*
+/provenance.*
